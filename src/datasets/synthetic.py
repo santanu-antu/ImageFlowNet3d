@@ -23,14 +23,28 @@ class SyntheticDataset(Dataset):
         super().__init__()
 
         self.target_dim = target_dim
-        all_image_folders = sorted(glob('%s/%s/*/' % (base_path, image_folder)))
+        # Normalize path construction to avoid issues with trailing slashes.
+        folder_glob = os.path.join(base_path, image_folder, '*/')
+        all_image_folders = sorted(glob(folder_glob))
 
         self.image_by_patient = []
 
+        # Track maximum timestamp across the dataset (used by training code).
+        # Synthetic images are named with 'time_XXX.png' so we can parse times.
+        self.max_t = 0
+
         for folder in all_image_folders:
-            paths = sorted(glob('%s/*.png' % (folder)))
+            paths = sorted(glob(os.path.join(folder, '*.png')))
             if len(paths) >= 2:
                 self.image_by_patient.append(paths)
+            for p in paths:
+                try:
+                    self.max_t = max(self.max_t, get_time(p))
+                except Exception:
+                    # If parsing fails, ignore and continue; downstream code
+                    # expects a numeric max_t but synthetic filenames should
+                    # follow the 'time_XXX.png' convention.
+                    pass
 
     def __len__(self) -> int:
         return len(self.image_by_patient)
