@@ -4,7 +4,7 @@
 #SBATCH --partition=pi_krishnaswamy
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=8
-#SBATCH --time=23:00:00
+#SBATCH --time=60:00:00
 #SBATCH --mem=32G
 #SBATCH --mail-type=ALL
 #SBATCH --output=../sbatch_logs/train_simulation_%j.out
@@ -41,8 +41,9 @@ PY
 
 python src/train_2pt_all.py \
   --mode train \
-  --max-epochs 2 \
+  --max-epochs 120 \
   --dataset-name synthetic \
   --dataset-path /home/sa2556/imageflownet/ImageFlowNet/data/synthesized \
   --image-folder base \
+  --segmentor-ckpt /home/sa2556/imageflownet/ImageFlowNet/checkpoints/segmentor.pth \
   --gpu-id 0
