@@ -30,6 +30,7 @@ from nn.autoencoder_ode import ODEAutoEncoder
 from nn.unet_ode import ODEUNet
 from nn.imageflownet_ode import ImageFlowNetODE
 from nn.imageflownet_sde import ImageFlowNetSDE
+from nn.imageflownet3d_ode import ImageFlowNet3DODE
 from nn.unet_t_emb import T_UNet
 from nn.unet_i2sb import I2SBUNet
 from nn.off_the_shelf_encoder import VisionEncoder
@@ -474,22 +475,9 @@ def val_epoch(config: AttributeHashmap,
     val_recon_psnr, val_recon_ssim, val_pred_psnr, val_pred_ssim = 0, 0, 0, 0
     val_seg_dice_xT, val_seg_dice_gt = 0, 0
 
-    if os.path.isfile(config.segmentor_ckpt):
-        segmentor = torch.nn.Sequential(
-            monai.networks.nets.DynUNet(
-                spatial_dims=2,
-                in_channels=1,
-                out_channels=1,
-                kernel_size=[5, 5, 5, 5],
-                filters=[16, 32, 64, 128],
-                strides=[1, 1, 1, 1],
-                upsample_kernel_size=[1, 1, 1, 1]),
-            torch.nn.Sigmoid()).to(device)
-        segmentor.load_state_dict(torch.load(config.segmentor_ckpt, map_location=device))
-        segmentor.eval()
-    else:
-        print('Using an identity mapping as a placeholder for segmentor.')
-        segmentor = torch.nn.Identity()
+    # Defer segmentor creation until we know if data are 2D. Skip for 3D volumes.
+    segmentor = None
+    have_seg_ckpt = os.path.isfile(config.segmentor_ckpt)
 
     assert len(val_set) == len(val_set.dataset)
     num_val_samples = min(config.max_validation_samples, len(val_set))
@@ -512,18 +500,41 @@ def val_epoch(config: AttributeHashmap,
         x_end_recon = model(x=x_end, t=torch.zeros(1).to(device))
         x_end_pred = model(x=x_start, t=torch.diff(t_list) * config.t_multiplier)
 
-        # Segmentor expects 1-channel input; convert RGB to grayscale if needed.
-        x_start_for_seg = x_start if x_start.shape[1] == 1 else x_start.mean(dim=1, keepdim=True)
-        x_end_for_seg = x_end if x_end.shape[1] == 1 else x_end.mean(dim=1, keepdim=True)
-        x_end_pred_for_seg = x_end_pred if x_end_pred.shape[1] == 1 else x_end_pred.mean(dim=1, keepdim=True)
+        # Determine if inputs are 3D volumes (then skip 2D segmentor)
+        is_3d = (images.ndim >= 6) or (x_start.ndim == 5)
 
-        x_start_seg = segmentor(x_start_for_seg) > 0.5
-        x_end_seg = segmentor(x_end_for_seg) > 0.5
-        x_end_pred_seg = segmentor(x_end_pred_for_seg) > 0.5
+        if (not is_3d) and have_seg_ckpt:
+            if segmentor is None:
+                segmentor = torch.nn.Sequential(
+                    monai.networks.nets.DynUNet(
+                        spatial_dims=2,
+                        in_channels=1,
+                        out_channels=1,
+                        kernel_size=[5, 5, 5, 5],
+                        filters=[16, 32, 64, 128],
+                        strides=[1, 1, 1, 1],
+                        upsample_kernel_size=[1, 1, 1, 1]),
+                    torch.nn.Sigmoid()).to(device)
+                segmentor.load_state_dict(torch.load(config.segmentor_ckpt, map_location=device))
+                segmentor.eval()
 
-        x0_true, x0_recon, xT_true, xT_recon, xT_pred, x0_seg, xT_seg, xT_pred_seg = \
-            numpy_variables(x_start, x_start_recon, x_end, x_end_recon, x_end_pred,
-                            x_start_seg, x_end_seg, x_end_pred_seg)
+            # Segmentor expects 1-channel input; convert RGB to grayscale if needed.
+            x_start_for_seg = x_start if x_start.shape[1] == 1 else x_start.mean(dim=1, keepdim=True)
+            x_end_for_seg = x_end if x_end.shape[1] == 1 else x_end.mean(dim=1, keepdim=True)
+            x_end_pred_for_seg = x_end_pred if x_end_pred.shape[1] == 1 else x_end_pred.mean(dim=1, keepdim=True)
+
+            x_start_seg = segmentor(x_start_for_seg) > 0.5
+            x_end_seg = segmentor(x_end_for_seg) > 0.5
+            x_end_pred_seg = segmentor(x_end_pred_for_seg) > 0.5
+
+            x0_true, x0_recon, xT_true, xT_recon, xT_pred, x0_seg, xT_seg, xT_pred_seg = \
+                numpy_variables(x_start, x_start_recon, x_end, x_end_recon, x_end_pred,
+                                x_start_seg, x_end_seg, x_end_pred_seg)
+        else:
+            # No segmentation available for 3D or missing ckpt
+            x0_true, x0_recon, xT_true, xT_recon, xT_pred = \
+                numpy_variables(x_start, x_start_recon, x_end, x_end_recon, x_end_pred)
+            x0_seg = xT_seg = xT_pred_seg = None
 
         # NOTE: Convert to image with normal dynamic range.
         x0_true, x0_recon, xT_true, xT_recon, xT_pred = \
@@ -534,8 +545,10 @@ def val_epoch(config: AttributeHashmap,
         val_pred_psnr += psnr(xT_true, xT_pred)
         val_pred_ssim += ssim(xT_true, xT_pred)
 
-        val_seg_dice_xT += dice_coeff(xT_seg, xT_pred_seg)
-        val_seg_dice_gt += dice_coeff(x0_seg, xT_seg)
+        if (xT_seg is not None) and (xT_pred_seg is not None):
+            val_seg_dice_xT += dice_coeff(xT_seg, xT_pred_seg)
+        if (x0_seg is not None) and (xT_seg is not None):
+            val_seg_dice_gt += dice_coeff(x0_seg, xT_seg)
 
         if shall_plot:
             save_path_fig_sbs = '%s/val/figure_log_epoch%s_sample%s.png' % (
@@ -543,7 +556,8 @@ def val_epoch(config: AttributeHashmap,
             plot_side_by_side(t_list, x0_true, xT_true, x0_recon, xT_recon, xT_pred, save_path_fig_sbs,
                               x0_true_seg=x0_seg, xT_pred_seg=xT_pred_seg, xT_true_seg=xT_seg)
 
-    del segmentor
+    if segmentor is not None:
+        del segmentor
 
     val_recon_psnr, val_recon_ssim, val_pred_psnr, val_pred_ssim, val_seg_dice_xT, val_seg_dice_gt = \
         [item / num_val_samples for item in (
@@ -929,9 +943,43 @@ def convert_variables(images: torch.Tensor,
 
 def numpy_variables(*tensors: torch.Tensor) -> Tuple[np.array]:
     '''
-    Some repetitive numpy casting of variables.
+    Convert tensors to numpy images for plotting.
+
+    Supports both 2D and 3D inputs:
+    - 2D tensors expected as [B, C, H, W] or [C, H, W]
+      -> returns [H, W, C]
+    - 3D tensors expected as [B, C, D, H, W] or [C, D, H, W]
+      -> takes the center slice along D and returns [H, W, C]
     '''
-    return [_tensor.cpu().detach().numpy().squeeze(0).transpose(1, 2, 0) for _tensor in tensors]
+    np_list = []
+    for _tensor in tensors:
+        arr = _tensor.detach().cpu().numpy()
+        # Remove batch dim if present
+        if arr.ndim >= 4 and arr.shape[0] in (1,):
+            arr = arr.squeeze(0)
+        # If 3D volume [C, D, H, W], take center slice along D
+        if arr.ndim == 4:
+            # shape: [C, D, H, W]
+            c, d, h, w = arr.shape
+            d_mid = d // 2
+            arr = arr[:, d_mid, :, :]  # -> [C, H, W]
+        # If single channel 2D [H, W], add channel dim
+        if arr.ndim == 2:
+            arr = arr[..., None]  # [H, W, 1]
+        elif arr.ndim == 3:
+            # [C, H, W] -> [H, W, C]
+            arr = np.transpose(arr, (1, 2, 0))
+        else:
+            # Fallback: try to squeeze to 2D/3D
+            arr = np.squeeze(arr)
+            if arr.ndim == 2:
+                arr = arr[..., None]
+            elif arr.ndim == 3:
+                pass
+            else:
+                raise ValueError(f"Unsupported tensor shape for plotting: {arr.shape}")
+        np_list.append(arr)
+    return np_list
 
 def cast_to_0to1(*np_arrays: np.array) -> Tuple[np.array]:
     '''

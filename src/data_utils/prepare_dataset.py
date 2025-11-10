@@ -6,6 +6,7 @@ from datasets.brain_ms import BrainMSDataset, BrainMSSubset, BrainMSSegDataset, 
 from datasets.brain_gbm import BrainGBMDataset, BrainGBMSubset, BrainGBMSegDataset, BrainGBMSegSubset
 from datasets.synthetic import SyntheticDataset, SyntheticSubset
 from datasets.synthetic import get_time as synth_get_time
+from datasets.synthetic3d import Synthetic3DDataset, Synthetic3DSubset
 from torch.utils.data import DataLoader
 from utils.attribute_hashmap import AttributeHashmap
 
@@ -14,6 +15,10 @@ def prepare_dataset(config: AttributeHashmap, transforms_list = [None, None, Non
     '''
     Prepare the dataset for predicting one future timepoint from one earlier timepoint.
     '''
+
+    # Normalize/alias dataset names
+    if getattr(config, 'dataset_name', None) == 'synthesized3d':
+        config.dataset_name = 'synthetic3d'
 
     # Read dataset.
     if config.dataset_name == 'retina_areds':
@@ -52,6 +57,13 @@ def prepare_dataset(config: AttributeHashmap, transforms_list = [None, None, Non
                                 target_dim=config.target_dim)
         Subset = SyntheticSubset
 
+    elif config.dataset_name == 'synthetic3d':
+        # On-disk 3D synthetic dataset analogous to 2D synthetic.
+        dataset = Synthetic3DDataset(base_path=config.dataset_path,
+                                     image_folder=config.image_folder,
+                                     target_dim=tuple(config.target_dim))
+        Subset = Synthetic3DSubset
+
     else:
         raise ValueError(
             'Dataset not found. Check `dataset_name` in config yaml file.')
@@ -86,9 +98,10 @@ def prepare_dataset(config: AttributeHashmap, transforms_list = [None, None, Non
     else:
         transforms_train, transforms_val, transforms_test = transforms_list
 
-    # Some dataset Subset classes (e.g., SyntheticSubset) do not accept
+    # Some dataset Subset classes (e.g., SyntheticSubset, Synthetic3DSubset) do not accept
     # `transforms` / `transforms_aug` kwargs. Only pass them when available.
-    if config.dataset_name == 'synthetic':
+    # Treat `synthetic3d` the same way for now (no 2D Albumentations on 3D volumes).
+    if config.dataset_name in ['synthetic', 'synthetic3d']:
         train_set = Subset(main_dataset=dataset,
                            subset_indices=train_indices,
                            return_format='one_pair')
