@@ -5,6 +5,8 @@ from datasets.retina_ucsf import RetinaUCSFDataset, RetinaUCSFSubset, RetinaUCSF
 from datasets.brain_ms import BrainMSDataset, BrainMSSubset, BrainMSSegDataset, BrainMSSegSubset, brain_MS_split
 from datasets.brain_gbm import BrainGBMDataset, BrainGBMSubset, BrainGBMSegDataset, BrainGBMSegSubset
 from datasets.synthetic import SyntheticDataset, SyntheticSubset
+from datasets.synthetic import get_time as synth_get_time
+from datasets.synthetic3d import Synthetic3DDataset, Synthetic3DSubset
 from torch.utils.data import DataLoader
 from utils.attribute_hashmap import AttributeHashmap
 
@@ -13,6 +15,10 @@ def prepare_dataset(config: AttributeHashmap, transforms_list = [None, None, Non
     '''
     Prepare the dataset for predicting one future timepoint from one earlier timepoint.
     '''
+
+    # Normalize/alias dataset names
+    if getattr(config, 'dataset_name', None) == 'synthesized3d':
+        config.dataset_name = 'synthetic3d'
 
     # Read dataset.
     if config.dataset_name == 'retina_areds':
@@ -31,15 +37,53 @@ def prepare_dataset(config: AttributeHashmap, transforms_list = [None, None, Non
         dataset = BrainGBMDataset(target_dim=config.target_dim)
         Subset = BrainGBMSubset
 
+    # elif config.dataset_name == 'synthetic':
+    #     # Allow config to omit `dataset_path` / `image_folder` and fall back
+    #     # to the defaults used by SyntheticDataset.
+    #     base_path = getattr(config, 'dataset_path', None)
+    #     image_folder = getattr(config, 'image_folder', None)
+    #     if base_path is None:
+    #         base_path = '../../data/synthesized/'
+    #     if image_folder is None:
+    #         image_folder = 'base/'
+    #     dataset = SyntheticDataset(base_path=base_path,
+    #                                image_folder=image_folder,
+    #                                target_dim=config.target_dim)
+    #     Subset = SyntheticSubset
+
     elif config.dataset_name == 'synthetic':
         dataset = SyntheticDataset(base_path=config.dataset_path,
-                                   image_folder=config.image_folder,
-                                   target_dim=config.target_dim)
+                                image_folder=config.image_folder,
+                                target_dim=config.target_dim)
         Subset = SyntheticSubset
+
+    elif config.dataset_name == 'synthetic3d':
+        # On-disk 3D synthetic dataset analogous to 2D synthetic.
+        dataset = Synthetic3DDataset(base_path=config.dataset_path,
+                                     image_folder=config.image_folder,
+                                     target_dim=tuple(config.target_dim))
+        Subset = Synthetic3DSubset
 
     else:
         raise ValueError(
             'Dataset not found. Check `dataset_name` in config yaml file.')
+
+    # For synthetic dataset, ensure max_t is computed to avoid division by zero later.
+    if config.dataset_name == 'synthetic':
+        try:
+            if not hasattr(dataset, 'max_t') or dataset.max_t == 0:
+                computed_max_t = 0
+                for image_list in getattr(dataset, 'image_by_patient', []):
+                    for p in image_list:
+                        try:
+                            computed_max_t = max(computed_max_t, synth_get_time(p))
+                        except Exception:
+                            pass
+                # Fallback to 1.0 if still zero to avoid division by zero downstream
+                dataset.max_t = computed_max_t if computed_max_t > 0 else 1.0
+        except Exception:
+            # Defensive fallback
+            dataset.max_t = 1.0
 
     # Load into DataLoader
     ratios = [float(c) for c in config.train_val_test_ratio.split(':')]
@@ -54,19 +98,33 @@ def prepare_dataset(config: AttributeHashmap, transforms_list = [None, None, Non
     else:
         transforms_train, transforms_val, transforms_test = transforms_list
 
-    train_set = Subset(main_dataset=dataset,
-                       subset_indices=train_indices,
-                       return_format='one_pair',
-                       transforms=transforms_train,
-                       transforms_aug=transforms_aug)
-    val_set = Subset(main_dataset=dataset,
-                     subset_indices=val_indices,
-                     return_format='all_pairs',
-                     transforms=transforms_val)
-    test_set = Subset(main_dataset=dataset,
-                      subset_indices=test_indices,
-                      return_format='all_pairs',
-                      transforms=transforms_test)
+    # Some dataset Subset classes (e.g., SyntheticSubset, Synthetic3DSubset) do not accept
+    # `transforms` / `transforms_aug` kwargs. Only pass them when available.
+    # Treat `synthetic3d` the same way for now (no 2D Albumentations on 3D volumes).
+    if config.dataset_name in ['synthetic', 'synthetic3d']:
+        train_set = Subset(main_dataset=dataset,
+                           subset_indices=train_indices,
+                           return_format='one_pair')
+        val_set = Subset(main_dataset=dataset,
+                         subset_indices=val_indices,
+                         return_format='all_pairs')
+        test_set = Subset(main_dataset=dataset,
+                          subset_indices=test_indices,
+                          return_format='all_pairs')
+    else:
+        train_set = Subset(main_dataset=dataset,
+                           subset_indices=train_indices,
+                           return_format='one_pair',
+                           transforms=transforms_train,
+                           transforms_aug=transforms_aug)
+        val_set = Subset(main_dataset=dataset,
+                         subset_indices=val_indices,
+                         return_format='all_pairs',
+                         transforms=transforms_val)
+        test_set = Subset(main_dataset=dataset,
+                          subset_indices=test_indices,
+                          return_format='all_pairs',
+                          transforms=transforms_test)
 
     min_sample_per_epoch = 5
     if 'max_training_samples' in config.keys():

@@ -76,7 +76,7 @@ def obtain_embeddings(config: AttributeHashmap):
 
     else:
         device = torch.device(
-            'cuda:%d' % config.gpu_id if torch.cuda.is_available() else 'cpu')
+            f"cuda:{int(config.gpu_id)}" if torch.cuda.is_available() else 'cpu')
         full_set, num_image_channel, max_t = \
             prepare_dataset_full_sequence(config=config)
         # Only relevant to ODE
