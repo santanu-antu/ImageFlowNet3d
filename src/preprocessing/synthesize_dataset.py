@@ -49,7 +49,7 @@ def _generate_longitudinal(image_shape: Tuple[int] = (256, 256),
     return images, square_centroid
 
 
-def synthesize_dataset(save_folder: str = '../../data/synthesized/', num_subjects: int = 200):
+def synthesize_dataset(save_folder: str = None, num_subjects: int = 200):
     '''
     Synthesize 4 datasets.
     1. The first dataset has no spatial variation. It has pixel-level alignment temporally.
@@ -57,6 +57,10 @@ def synthesize_dataset(save_folder: str = '../../data/synthesized/', num_subject
     3. The third dataset has a predictable rotation factor.
     4. The fourth dataset is irregular. At each time point, we randomly pick an image from 1/2/3 at that time point.
     '''
+    if save_folder is None:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(os.path.dirname(script_dir))
+        save_folder = os.path.join(project_root, 'data', 'synthesized') + '/'
 
     for subject_idx in tqdm(range(num_subjects)):
         images, square_centroid = _generate_longitudinal(random_seed=subject_idx)
