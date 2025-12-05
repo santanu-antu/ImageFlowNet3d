@@ -20,7 +20,7 @@ module load miniconda
 # Activate conda environment
 # Note: conda activation scripts may reference unset vars; temporarily disable 'nounset'.
 set +u
-source /vast/palmer/apps/avx2/software/miniconda/24.7.1/etc/profile.d/conda.sh
+source /apps/software/2022b/software/miniconda/24.11.3/etc/profile.d/conda.sh
 conda activate imageflownet_gpu
 set -u
 

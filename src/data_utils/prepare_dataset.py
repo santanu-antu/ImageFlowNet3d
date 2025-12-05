@@ -6,6 +6,8 @@ from datasets.brain_ms import BrainMSDataset, BrainMSSubset, BrainMSSegDataset, 
 from datasets.brain_gbm import BrainGBMDataset, BrainGBMSubset, BrainGBMSegDataset, BrainGBMSegSubset
 from datasets.synthetic import SyntheticDataset, SyntheticSubset
 from datasets.synthetic import get_time as synth_get_time
+from datasets.synthetic3d import Synthetic3DDataset, Synthetic3DSubset
+from datasets.synthetic3d import get_time_3d as synth3d_get_time
 from torch.utils.data import DataLoader
 from utils.attribute_hashmap import AttributeHashmap
 
@@ -52,6 +54,12 @@ def prepare_dataset(config: AttributeHashmap, transforms_list = [None, None, Non
                                 target_dim=config.target_dim)
         Subset = SyntheticSubset
 
+    elif config.dataset_name == 'synthetic3d':
+        dataset = Synthetic3DDataset(base_path=config.dataset_path,
+                                     image_folder=config.image_folder,
+                                     target_dim=config.target_dim)
+        Subset = Synthetic3DSubset
+
     else:
         raise ValueError(
             'Dataset not found. Check `dataset_name` in config yaml file.')
@@ -73,6 +81,21 @@ def prepare_dataset(config: AttributeHashmap, transforms_list = [None, None, Non
             # Defensive fallback
             dataset.max_t = 1.0
 
+    # For synthetic3d dataset, ensure max_t is computed
+    if config.dataset_name == 'synthetic3d':
+        try:
+            if not hasattr(dataset, 'max_t') or dataset.max_t == 0:
+                computed_max_t = 0
+                for volume_list in getattr(dataset, 'volumes_by_subject', []):
+                    for p in volume_list:
+                        try:
+                            computed_max_t = max(computed_max_t, synth3d_get_time(p))
+                        except Exception:
+                            pass
+                dataset.max_t = computed_max_t if computed_max_t > 0 else 1.0
+        except Exception:
+            dataset.max_t = 1.0
+
     # Load into DataLoader
     ratios = [float(c) for c in config.train_val_test_ratio.split(':')]
     ratios = tuple([c / sum(ratios) for c in ratios])
@@ -86,9 +109,9 @@ def prepare_dataset(config: AttributeHashmap, transforms_list = [None, None, Non
     else:
         transforms_train, transforms_val, transforms_test = transforms_list
 
-    # Some dataset Subset classes (e.g., SyntheticSubset) do not accept
+    # Some dataset Subset classes (e.g., SyntheticSubset, Synthetic3DSubset) do not accept
     # `transforms` / `transforms_aug` kwargs. Only pass them when available.
-    if config.dataset_name == 'synthetic':
+    if config.dataset_name in ['synthetic', 'synthetic3d']:
         train_set = Subset(main_dataset=dataset,
                            subset_indices=train_indices,
                            return_format='one_pair')

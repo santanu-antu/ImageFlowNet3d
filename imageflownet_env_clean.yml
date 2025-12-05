@@ -1,0 +1,46 @@
+name: imageflownet
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.10
+  - pytorch=2.4.0
+  - pytorch-cuda=12.1
+  - torchvision=0.19.0
+  - torchaudio=2.4.0
+  - numpy
+  - scipy
+  - pandas
+  - matplotlib
+  - scikit-learn
+  - scikit-image
+  - opencv
+  - pillow
+  - tqdm
+  - pyyaml
+  - nibabel
+  - h5py
+  - imageio
+  - biopython
+  - ipykernel
+  - ipywidgets
+  - jupyterlab_widgets
+  - plotly
+  - seaborn
+  - pip
+  - pip:
+      - albumentations
+      - antspyx
+      - monai
+      - timm
+      - torch-ema
+      - torchcde
+      - torchdiffeq
+      - torchsde
+      - segment-anything
+      - huggingface-hub
+      - safetensors
+      - phate
+      - graphtools

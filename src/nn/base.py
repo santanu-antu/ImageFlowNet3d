@@ -26,15 +26,21 @@ class BaseNetwork(torch.nn.Module):
     def init_params(self):
         '''
         Parameter initialization.
+        Supports both 2D and 3D convolutional and normalization layers.
         '''
         for m in self.modules():
-            if isinstance(m, torch.nn.Conv2d) or isinstance(m, torch.nn.ConvTranspose2d):
+            if isinstance(m, (torch.nn.Conv2d, torch.nn.Conv3d,
+                              torch.nn.ConvTranspose2d, torch.nn.ConvTranspose3d)):
                 torch.nn.init.kaiming_normal_(m.weight, mode='fan_in')
                 if m.bias is not None:
                     torch.nn.init.constant_(m.bias, 0)
-            elif isinstance(m, torch.nn.BatchNorm2d):
-                torch.nn.init.constant_(m.weight, 1)
-                torch.nn.init.constant_(m.bias, 0)
+            elif isinstance(m, (torch.nn.BatchNorm2d, torch.nn.BatchNorm3d,
+                                torch.nn.InstanceNorm2d, torch.nn.InstanceNorm3d,
+                                torch.nn.GroupNorm)):
+                if m.weight is not None:
+                    torch.nn.init.constant_(m.weight, 1)
+                if m.bias is not None:
+                    torch.nn.init.constant_(m.bias, 0)
             elif isinstance(m, torch.nn.Linear):
                 torch.nn.init.normal_(m.weight, std=1e-3)
                 if m.bias is not None:
