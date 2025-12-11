@@ -100,8 +100,35 @@ def prepare_dataset(config: AttributeHashmap, transforms_list = [None, None, Non
     ratios = [float(c) for c in config.train_val_test_ratio.split(':')]
     ratios = tuple([c / sum(ratios) for c in ratios])
     indices = list(range(len(dataset)))
-    train_indices, val_indices, test_indices = \
-        split_indices(indices=indices, splits=ratios, random_seed=1)
+
+    if hasattr(config, 'subject_idx') and config.subject_idx is not None:
+        # Handle both single int (if passed differently) or list
+        subject_indices = config.subject_idx
+        if isinstance(subject_indices, int):
+            subject_indices = [subject_indices]
+        
+        # Ensure all are ints
+        subject_indices = [int(x) for x in subject_indices]
+
+        for subject_idx in subject_indices:
+            if subject_idx < 0 or subject_idx >= len(dataset):
+                raise ValueError(f"Subject index {subject_idx} out of bounds. Dataset size: {len(dataset)}")
+        
+        # Get standard split first
+        train_indices, val_indices, _ = split_indices(indices=indices, splits=ratios, random_seed=1)
+        
+        # Override test set
+        test_indices = list(subject_indices)
+        
+        # Remove from other sets if present
+        for subject_idx in subject_indices:
+            if subject_idx in train_indices:
+                train_indices.remove(subject_idx)
+            if subject_idx in val_indices:
+                val_indices.remove(subject_idx)
+    else:
+        train_indices, val_indices, test_indices = \
+            split_indices(indices=indices, splits=ratios, random_seed=1)
 
     transforms_aug = None
     if len(transforms_list) == 4:
@@ -118,9 +145,14 @@ def prepare_dataset(config: AttributeHashmap, transforms_list = [None, None, Non
         val_set = Subset(main_dataset=dataset,
                          subset_indices=val_indices,
                          return_format='all_pairs')
+        
+        test_return_format = 'all_pairs'
+        if getattr(config, 'test_min_max', False) and config.dataset_name == 'synthetic3d':
+            test_return_format = 'min_max_pair'
+            
         test_set = Subset(main_dataset=dataset,
                           subset_indices=test_indices,
-                          return_format='all_pairs')
+                          return_format=test_return_format)
     else:
         train_set = Subset(main_dataset=dataset,
                            subset_indices=train_indices,

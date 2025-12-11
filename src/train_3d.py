@@ -25,6 +25,12 @@ from utils.log_util import log
 from utils.metrics import psnr, ssim
 from utils.parse import parse_settings
 from utils.seed import seed_everything
+from utils.patch_utils import (
+    extract_corresponding_patches_3d,
+    sliding_window_inference_3d,
+    get_num_patches,
+    check_patchify_compatibility
+)
 
 # Import 3D model
 from nn.imageflownet_3d_ode import ImageFlowNet3DODE
@@ -79,6 +85,19 @@ def train(config: AttributeHashmap):
     log('Attention resolutions: %s' % config.attention_resolutions, to_console=True)
     log('Use checkpoint: %s' % config.use_checkpoint, to_console=True)
     log('Number of parameters: %d' % sum(p.numel() for p in model.parameters()), to_console=True)
+    
+    # Patchified training configuration
+    use_patches = config.num_patches_per_dim > 1
+    if use_patches:
+        full_volume_size = config.target_dim[0]  # Assuming cubic
+        patch_size = config.volume_size
+        is_compatible, msg = check_patchify_compatibility(
+            full_volume_size, patch_size, config.num_patches_per_dim)
+        log('Patchified training: %s' % msg, to_console=True)
+        log('Training on patches of size %d from volumes of size %d' % (
+            patch_size, full_volume_size), to_console=True)
+    else:
+        log('Patchified training: Disabled (full volume training)', to_console=True)
 
     model.to(device)
     model.init_params()
@@ -189,12 +208,16 @@ def train_epoch(config: AttributeHashmap,
                 mse_loss: torch.nn.Module,
                 backprop_freq: int,
                 train_time_dependent: bool):
-    """Training epoch for 3D ImageFlowNetODE."""
+    """Training epoch for 3D ImageFlowNetODE with optional patchified training."""
 
     train_loss_recon, train_loss_pred = 0, 0
     train_recon_psnr, train_pred_psnr = 0, 0
     model.train()
     optimizer.zero_grad()
+
+    # Check if using patchified training
+    use_patches = config.num_patches_per_dim > 1
+    patch_size = config.volume_size
 
     if not train_time_dependent:
         log('[Epoch %d] Will not train the time-dependent modules until the reconstruction is good enough.' % (epoch_idx + 1),
@@ -218,7 +241,18 @@ def train_epoch(config: AttributeHashmap,
         assert timestamps.shape[1] == 2
 
         x_list, t_list = convert_variables_3d(volumes, timestamps, device)
-        x_start, x_end = x_list
+        x_start_full, x_end_full = x_list
+
+        # Extract patches if using patchified training
+        if use_patches:
+            # Extract corresponding random patches from both volumes
+            x_start_patch, x_end_patch, _ = extract_corresponding_patches_3d(
+                x_start_full, x_end_full, patch_size)
+            x_start = x_start_patch.unsqueeze(0).to(device)  # Add batch dim
+            x_end = x_end_patch.unsqueeze(0).to(device)
+        else:
+            x_start = x_start_full
+            x_end = x_end_full
 
         x_start_noisy = add_random_noise(x_start)
         x_end_noisy = add_random_noise(x_end)
@@ -315,9 +349,13 @@ def val_epoch(config: AttributeHashmap,
               val_set: Dataset,
               model: torch.nn.Module,
               epoch_idx: int):
-    """Validation epoch for 3D ImageFlowNetODE."""
+    """Validation epoch for 3D ImageFlowNetODE with optional patchified inference."""
 
     val_recon_psnr, val_pred_psnr = 0, 0
+
+    # Check if using patchified training
+    use_patches = config.num_patches_per_dim > 1
+    patch_size = config.volume_size
 
     assert len(val_set) == len(val_set.dataset)
     num_val_samples = min(config.max_validation_samples, len(val_set))
@@ -335,9 +373,33 @@ def val_epoch(config: AttributeHashmap,
         x_list, t_list = convert_variables_3d(volumes, timestamps, device)
         x_start, x_end = x_list
 
-        x_start_recon = model(x=x_start, t=torch.zeros(1).to(device))
-        x_end_recon = model(x=x_end, t=torch.zeros(1).to(device))
-        x_end_pred = model(x=x_start, t=torch.diff(t_list) * config.t_multiplier)
+        if use_patches:
+            # Use sliding window inference for validation on full volumes
+            x_start_recon = sliding_window_inference_3d(
+                x_start, model, patch_size,
+                stride=patch_size,  # Non-overlapping for speed
+                t=torch.zeros(1).to(device),
+                overlap_mode='average',
+                device=device
+            ).to(device)
+            x_end_recon = sliding_window_inference_3d(
+                x_end, model, patch_size,
+                stride=patch_size,
+                t=torch.zeros(1).to(device),
+                overlap_mode='average',
+                device=device
+            ).to(device)
+            x_end_pred = sliding_window_inference_3d(
+                x_start, model, patch_size,
+                stride=patch_size,
+                t=torch.diff(t_list) * config.t_multiplier,
+                overlap_mode='average',
+                device=device
+            ).to(device)
+        else:
+            x_start_recon = model(x=x_start, t=torch.zeros(1).to(device))
+            x_end_recon = model(x=x_end, t=torch.zeros(1).to(device))
+            x_end_pred = model(x=x_start, t=torch.diff(t_list) * config.t_multiplier)
 
         x0_true, x0_recon, xT_true, xT_recon, xT_pred = \
             numpy_variables_3d(x_start, x_start_recon, x_end, x_end_recon, x_end_pred)
@@ -366,7 +428,7 @@ def val_epoch(config: AttributeHashmap,
 
 @torch.no_grad()
 def test(config: AttributeHashmap):
-    """Test the trained 3D model."""
+    """Test the trained 3D model with optional patchified inference."""
     device = torch.device(f"cuda:{int(config.gpu_id)}" if torch.cuda.is_available() else "cpu")
     train_set, val_set, test_set, num_image_channel, max_t = \
         prepare_dataset(config=config)
@@ -399,6 +461,16 @@ def test(config: AttributeHashmap):
     config.t_multiplier = config.ode_max_t / max_t
     mse_loss = torch.nn.MSELoss()
 
+    # Check if using patchified inference
+    use_patches = config.num_patches_per_dim > 1
+    patch_size = config.volume_size
+    # For test, use overlapping patches with Gaussian blending for best quality
+    test_stride = patch_size // 2 if use_patches else patch_size
+
+    if use_patches:
+        log('Using patchified inference with patch_size=%d, stride=%d, overlap_mode=gaussian' %
+            (patch_size, test_stride), to_console=True)
+
     assert len(test_set) == len(test_set.dataset)
     num_test_samples = min(config.max_testing_samples, len(test_set))
 
@@ -419,9 +491,33 @@ def test(config: AttributeHashmap):
         x_list, t_list = convert_variables_3d(volumes, timestamps, device)
         x_start, x_end = x_list
 
-        x_start_recon = model(x=x_start, t=torch.zeros(1).to(device))
-        x_end_recon = model(x=x_end, t=torch.zeros(1).to(device))
-        x_end_pred = model(x=x_start, t=torch.diff(t_list) * config.t_multiplier)
+        if use_patches:
+            # Use sliding window inference with overlapping patches
+            x_start_recon = sliding_window_inference_3d(
+                x_start, model, patch_size,
+                stride=test_stride,
+                t=torch.zeros(1).to(device),
+                overlap_mode='gaussian',
+                device=device
+            ).to(device)
+            x_end_recon = sliding_window_inference_3d(
+                x_end, model, patch_size,
+                stride=test_stride,
+                t=torch.zeros(1).to(device),
+                overlap_mode='gaussian',
+                device=device
+            ).to(device)
+            x_end_pred = sliding_window_inference_3d(
+                x_start, model, patch_size,
+                stride=test_stride,
+                t=torch.diff(t_list) * config.t_multiplier,
+                overlap_mode='gaussian',
+                device=device
+            ).to(device)
+        else:
+            x_start_recon = model(x=x_start, t=torch.zeros(1).to(device))
+            x_end_recon = model(x=x_end, t=torch.zeros(1).to(device))
+            x_end_pred = model(x=x_start, t=torch.diff(t_list) * config.t_multiplier)
 
         loss_recon = mse_loss(x_start, x_start_recon) + mse_loss(x_end, x_end_recon)
         loss_pred = mse_loss(x_end, x_end_pred)
@@ -632,7 +728,10 @@ if __name__ == '__main__':
 
     # Model settings
     parser.add_argument('--model', default='ImageFlowNet3DODE', type=str)
-    parser.add_argument('--volume-size', default=64, type=int)
+    parser.add_argument('--volume-size', default=64, type=int,
+                        help='Size of volume patches for training. When num-patches-per-dim=1, this equals target-dim.')
+    parser.add_argument('--num-patches-per-dim', default=1, type=int,
+                        help='Number of patches per dimension. 1=full volume (unpatchified), 2=8 patches from 2x2x2 grid, etc.')
     parser.add_argument('--random-seed', default=1, type=int)
     parser.add_argument('--learning-rate', default=1e-4, type=float)
     parser.add_argument('--max-epochs', default=120, type=int)
@@ -649,6 +748,8 @@ if __name__ == '__main__':
     parser.add_argument('--max-training-samples', default=512, type=int)
     parser.add_argument('--max-validation-samples', default=64, type=int)
     parser.add_argument('--max-testing-samples', default=100, type=int)
+    parser.add_argument('--subject-idx', default=None, type=int, nargs='+', help='Index of specific subject(s) to test on')
+    parser.add_argument('--test-min-max', action='store_true', help='Only test on min-max time pairs for each subject')
     parser.add_argument('--n-plot-per-epoch', default=4, type=int)
 
     # Loss coefficients

@@ -84,7 +84,7 @@ class Synthetic3DSubset(Synthetic3DDataset):
     def __init__(self,
                  main_dataset: Synthetic3DDataset = None,
                  subset_indices: List[int] = None,
-                 return_format: str = Literal['one_pair', 'all_pairs', 'array']):
+                 return_format: str = Literal['one_pair', 'all_pairs', 'array', 'min_max_pair']):
         """
         Args:
             main_dataset: The parent Synthetic3DDataset
@@ -93,6 +93,7 @@ class Synthetic3DSubset(Synthetic3DDataset):
                 - 'one_pair': Return one randomly sampled pair per subject
                 - 'all_pairs': Return all possible pairs
                 - 'array': Return all timepoints as an array
+                - 'min_max_pair': Return only the pair (min_t, max_t) for each subject
         """
         super().__init__()
 
@@ -104,17 +105,24 @@ class Synthetic3DSubset(Synthetic3DDataset):
         ]
 
         self.all_volume_pairs = []
-        for volume_list in self.volumes_by_subject:
-            pair_indices = list(
-                itertools.combinations(np.arange(len(volume_list)), r=2))
-            for (idx1, idx2) in pair_indices:
-                self.all_volume_pairs.append(
-                    [volume_list[idx1], volume_list[idx2]])
+        if self.return_format == 'min_max_pair':
+            for volume_list in self.volumes_by_subject:
+                # Sort by time to ensure min and max
+                sorted_volumes = sorted(volume_list, key=get_time_3d)
+                if len(sorted_volumes) >= 2:
+                    self.all_volume_pairs.append([sorted_volumes[0], sorted_volumes[-1]])
+        else:
+            for volume_list in self.volumes_by_subject:
+                pair_indices = list(
+                    itertools.combinations(np.arange(len(volume_list)), r=2))
+                for (idx1, idx2) in pair_indices:
+                    self.all_volume_pairs.append(
+                        [volume_list[idx1], volume_list[idx2]])
 
     def __len__(self) -> int:
         if self.return_format == 'one_pair':
             return len(self.volumes_by_subject)
-        elif self.return_format == 'all_pairs':
+        elif self.return_format in ['all_pairs', 'min_max_pair']:
             return len(self.all_volume_pairs)
         elif self.return_format == 'array':
             return len(self.volumes_by_subject)
@@ -134,7 +142,7 @@ class Synthetic3DSubset(Synthetic3DDataset):
             ])
             timestamps = np.array([get_time_3d(p) for p in sampled_pair])
 
-        elif self.return_format == 'all_pairs':
+        elif self.return_format in ['all_pairs', 'min_max_pair']:
             queried_pair = self.all_volume_pairs[idx]
             volumes = np.array([
                 load_volume(p, target_dim=self.target_dim) for p in queried_pair
