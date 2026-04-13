@@ -8,6 +8,9 @@ from datasets.synthetic import SyntheticDataset, SyntheticSubset
 from datasets.synthetic import get_time as synth_get_time
 from datasets.synthetic3d import Synthetic3DDataset, Synthetic3DSubset
 from datasets.synthetic3d import get_time_3d as synth3d_get_time
+from datasets.brain_adni import BrainADNIDataset, BrainADNISubset
+from datasets.brain_adni import get_time_adni as adni_get_time
+# from datasets.brain_metastases import BrainMetastasesDataset, BrainMetastasesSubset
 from torch.utils.data import DataLoader
 from utils.attribute_hashmap import AttributeHashmap
 
@@ -34,19 +37,9 @@ def prepare_dataset(config: AttributeHashmap, transforms_list = [None, None, Non
         dataset = BrainGBMDataset(target_dim=config.target_dim)
         Subset = BrainGBMSubset
 
-    # elif config.dataset_name == 'synthetic':
-    #     # Allow config to omit `dataset_path` / `image_folder` and fall back
-    #     # to the defaults used by SyntheticDataset.
-    #     base_path = getattr(config, 'dataset_path', None)
-    #     image_folder = getattr(config, 'image_folder', None)
-    #     if base_path is None:
-    #         base_path = '../../data/synthesized/'
-    #     if image_folder is None:
-    #         image_folder = 'base/'
-    #     dataset = SyntheticDataset(base_path=base_path,
-    #                                image_folder=image_folder,
-    #                                target_dim=config.target_dim)
-    #     Subset = SyntheticSubset
+    elif config.dataset_name == 'brain_metastases':
+        dataset = BrainMetastasesDataset(target_dim=config.target_dim)
+        Subset = BrainMetastasesSubset
 
     elif config.dataset_name == 'synthetic':
         dataset = SyntheticDataset(base_path=config.dataset_path,
@@ -59,6 +52,11 @@ def prepare_dataset(config: AttributeHashmap, transforms_list = [None, None, Non
                                      image_folder=config.image_folder,
                                      target_dim=config.target_dim)
         Subset = Synthetic3DSubset
+
+    elif config.dataset_name == 'brain_adni':
+        dataset = BrainADNIDataset(base_path=config.dataset_path,
+                                   target_dim=config.target_dim)
+        Subset = BrainADNISubset
 
     else:
         raise ValueError(
@@ -90,6 +88,21 @@ def prepare_dataset(config: AttributeHashmap, transforms_list = [None, None, Non
                     for p in volume_list:
                         try:
                             computed_max_t = max(computed_max_t, synth3d_get_time(p))
+                        except Exception:
+                            pass
+                dataset.max_t = computed_max_t if computed_max_t > 0 else 1.0
+        except Exception:
+            dataset.max_t = 1.0
+
+    # For brain_adni dataset, ensure max_t is computed
+    if config.dataset_name == 'brain_adni':
+        try:
+            if not hasattr(dataset, 'max_t') or dataset.max_t == 0:
+                computed_max_t = 0
+                for volume_list in getattr(dataset, 'volumes_by_subject', []):
+                    for p in volume_list:
+                        try:
+                            computed_max_t = max(computed_max_t, adni_get_time(p))
                         except Exception:
                             pass
                 dataset.max_t = computed_max_t if computed_max_t > 0 else 1.0
@@ -138,7 +151,7 @@ def prepare_dataset(config: AttributeHashmap, transforms_list = [None, None, Non
 
     # Some dataset Subset classes (e.g., SyntheticSubset, Synthetic3DSubset) do not accept
     # `transforms` / `transforms_aug` kwargs. Only pass them when available.
-    if config.dataset_name in ['synthetic', 'synthetic3d']:
+    if config.dataset_name in ['synthetic', 'synthetic3d', 'brain_adni', 'brain_metastases']:
         train_set = Subset(main_dataset=dataset,
                            subset_indices=train_indices,
                            return_format='one_pair')
@@ -147,7 +160,7 @@ def prepare_dataset(config: AttributeHashmap, transforms_list = [None, None, Non
                          return_format='all_pairs')
         
         test_return_format = 'all_pairs'
-        if getattr(config, 'test_min_max', False) and config.dataset_name == 'synthetic3d':
+        if getattr(config, 'test_min_max', False) and config.dataset_name in ['synthetic3d', 'brain_adni']:
             test_return_format = 'min_max_pair'
             
         test_set = Subset(main_dataset=dataset,

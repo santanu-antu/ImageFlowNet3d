@@ -66,6 +66,14 @@ def train(config: AttributeHashmap):
         len(train_set.dataset), len(val_set.dataset), len(test_set.dataset)), to_console=True)
     log('Max timestamp in dataset: %.2f' % max_t, to_console=True)
 
+    # Log train/val/test split subject IDs if available
+    if hasattr(train_set.dataset.dataset, 'subject_ids') and len(train_set.dataset.dataset.subject_ids) > 0:
+        log('Train subjects (%d): %s' % (len(train_set.dataset.dataset.subject_ids), train_set.dataset.dataset.subject_ids), to_console=True)
+    if hasattr(val_set.dataset, 'subject_ids') and len(val_set.dataset.subject_ids) > 0:
+        log('Val subjects (%d): %s' % (len(val_set.dataset.subject_ids), val_set.dataset.subject_ids), to_console=True)
+    if hasattr(test_set.dataset, 'subject_ids') and len(test_set.dataset.subject_ids) > 0:
+        log('Test subjects (%d): %s' % (len(test_set.dataset.subject_ids), test_set.dataset.subject_ids), to_console=True)
+
     # Build the 3D model
     model = ImageFlowNet3DODE(
         device=device,
@@ -328,7 +336,21 @@ def train_epoch(config: AttributeHashmap,
         if shall_plot:
             save_path_fig = '%s/train/figure_log_epoch%s_sample%s.png' % (
                 config.save_folder, str(epoch_idx + 1).zfill(5), str(iter_idx + 1).zfill(5))
-            plot_volume_slices(t_list, x0_true, xT_true, x0_recon, xT_recon, xT_pred, save_path_fig, save_npy=False)
+            
+            # Helper to get first item for plotting (handle batch > 1)
+            def _get_first(arr):
+                while arr.ndim > 3:
+                    arr = arr[0]
+                return arr
+                
+            plot_volume_slices(t_list, 
+                               _get_first(x0_true), 
+                               _get_first(xT_true), 
+                               _get_first(x0_recon), 
+                               _get_first(xT_recon), 
+                               _get_first(xT_pred), 
+                               save_path=save_path_fig,
+                               slice_idx=140 if not use_patches else None)
 
     train_loss_pred, train_loss_recon, train_recon_psnr, train_pred_psnr = \
         [item / num_train_samples for item in (train_loss_pred, train_loss_recon, train_recon_psnr, train_pred_psnr)]
@@ -413,7 +435,7 @@ def val_epoch(config: AttributeHashmap,
         if shall_plot:
             save_path_fig = '%s/val/figure_log_epoch%s_sample%s.png' % (
                 config.save_folder, str(epoch_idx + 1).zfill(5), str(iter_idx + 1).zfill(5))
-            plot_volume_slices(t_list, x0_true, xT_true, x0_recon, xT_recon, xT_pred, save_path_fig, save_npy=False)
+            plot_volume_slices(t_list, x0_true, xT_true, x0_recon, xT_recon, xT_pred, save_path_fig, save_npy=False, slice_idx=140)
 
     val_recon_psnr, val_pred_psnr = \
         [item / num_val_samples for item in (val_recon_psnr, val_pred_psnr)]
@@ -603,29 +625,36 @@ def plot_volume_slices(t_list: torch.Tensor,
                        xT_recon: np.ndarray,
                        xT_pred: np.ndarray,
                        save_path: str,
-                       save_npy: bool = False):
+                       save_npy: bool = False,
+                       slice_idx: int = None):
     """
-    Plot central axial slices of 3D volumes for visualization.
+    Plot axial slices of 3D volumes for visualization.
     Uses same format as 2D case with side-by-side comparison.
     
     Optionally saves the full 3D volumes as .npy files.
     """
-    # Get central axial slice
     D, H, W = x0_true.shape
-    slice_idx = D // 2
+    # Plotting Sagittal view (slice along Width, dim 2) instead of Axial
+    if slice_idx is None:
+        slice_idx = W // 2
     
-    # Extract central slices
-    x0_true_slice = x0_true[slice_idx, :, :]
-    xT_true_slice = xT_true[slice_idx, :, :]
-    x0_recon_slice = x0_recon[slice_idx, :, :]
-    xT_recon_slice = xT_recon[slice_idx, :, :]
-    xT_pred_slice = xT_pred[slice_idx, :, :]
+    # Clip slice_idx if out of bounds (e.g. if patches are small)
+    if slice_idx >= W:
+        print(f"Slice {slice_idx} out of bounds for width {W}, using center {W//2}")
+        slice_idx = W // 2
+    
+    # Extract slices
+    x0_true_slice = x0_true[:, :, slice_idx]
+    xT_true_slice = xT_true[:, :, slice_idx]
+    x0_recon_slice = x0_recon[:, :, slice_idx]
+    xT_recon_slice = xT_recon[:, :, slice_idx]
+    xT_pred_slice = xT_pred[:, :, slice_idx]
     
     # Create figure similar to 2D case
     fig_sbs = plt.figure(figsize=(20, 8))
     plt.rcParams['font.family'] = 'serif'
     
-    aspect_ratio = H / W
+    aspect_ratio = D / H
 
     # First column: Ground Truth
     ax = fig_sbs.add_subplot(2, 5, 1)

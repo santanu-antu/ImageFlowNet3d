@@ -1,4 +1,7 @@
 .vscode
+.codex
+.codex/
+.venv/
 data
 **/__pycache__
 
@@ -21,3 +24,12 @@ data
 **/*.out
 **/bash_*
 **/bash*
+shell_scripts/skull_strip_ad_to_ad_gpu.sh
+sbatch_logs/reg_ad_to_ad_7403622.err
+sbatch_logs/reg_ad_to_ad_7578989.err
+.gitignore
+build_log_035_v2.txt
+build_log_035.txt
+shell_scripts/register_adni.sh
+shell_scripts/convert_npy_adni.sh
+sbatch_logs/convert_npy_8121329.err
