@@ -33,3 +33,12 @@ build_log_035.txt
 shell_scripts/register_adni.sh
 shell_scripts/convert_npy_adni.sh
 sbatch_logs/convert_npy_8121329.err
+shell_scripts/register_cn_mci_ad.sh
+shell_scripts/skull_strip_cn_to_mci_ad_gpu.sh
+shell_scripts/train_3d_adni.sh
+sbatch_logs/reg_cn_mci_ad_9054629.err
+.gitignore
+ztesting.ipynb
+train_3d.log
+.gitignore
+sbatch_logs/train_3d_adni_8121779.err

@@ -381,6 +381,9 @@ def val_epoch(config: AttributeHashmap,
 
     assert len(val_set) == len(val_set.dataset)
     num_val_samples = min(config.max_validation_samples, len(val_set))
+    if num_val_samples == 0:
+        return 0.0, 0.0
+
     plot_freq = max(1, num_val_samples // config.n_plot_per_epoch)
 
     for iter_idx, (volumes, timestamps) in enumerate(tqdm(val_set, desc=f'Epoch {epoch_idx+1} Val')):
@@ -495,6 +498,8 @@ def test(config: AttributeHashmap):
 
     assert len(test_set) == len(test_set.dataset)
     num_test_samples = min(config.max_testing_samples, len(test_set))
+    if num_test_samples == 0:
+        return
 
     save_path_fig_summary = '%s/results/summary.png' % config.save_folder
     os.makedirs(os.path.dirname(save_path_fig_summary), exist_ok=True)

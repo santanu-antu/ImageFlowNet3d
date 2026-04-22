@@ -8,6 +8,7 @@ import csv
 import argparse
 import logging
 import shutil
+import re
 from glob import glob
 from pathlib import Path
 from datetime import datetime
@@ -132,8 +133,13 @@ def collect_representative_per_visit(patient_dir: str):
             # Exclude masks based on user request ('_bet.nii.gz' are masks here)
             continue
         
-        # Determine date from parent folder (e.g. 2006-08-30_12_31_31.0)
-        date_str = vol.parent.name.split("_")[0]
+        # Determine date from path (e.g. 2006-08-30_12_31_31.0)
+        match = re.search(r'(\d{4}-\d{2}-\d{2})', str(vol))
+        if match:
+            date_str = match.group(1)
+        else:
+            date_str = vol.parent.name.split("_")[0]
+            
         visits.setdefault(date_str, []).append(str(vol))
 
     reps = []

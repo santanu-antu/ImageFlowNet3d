@@ -18,6 +18,7 @@ class ImageFlowNet3DODE(BaseNetwork):
                  in_channels: int,
                  volume_size: int = 64,
                  ode_location: str = 'all_connections',
+                 attention_resolutions: str = '16,8,4',
                  contrastive: bool = False,
                  use_checkpoint: bool = False,
                  num_filters: int = 64,
@@ -63,7 +64,7 @@ class ImageFlowNet3DODE(BaseNetwork):
             learn_sigma=False,
             class_cond=False,
             use_checkpoint=use_checkpoint,
-            attention_resolutions='16,8,4',  # Disable attention by default for memory
+            attention_resolutions=attention_resolutions,
             num_heads=4,
             num_head_channels=16,
             num_heads_upsample=-1,

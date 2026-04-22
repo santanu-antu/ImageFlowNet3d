@@ -17,7 +17,31 @@ logging.basicConfig(
 def ensure_dir(path):
     os.makedirs(path, exist_ok=True)
 
+def normalize(volume):
+    volume = np.nan_to_num(volume, nan=0.0, posinf=0.0, neginf=0.0)
+    mask = volume != 0
+    
+    if not np.any(mask):
+        return np.full_like(volume, -1.0)
+        
+    vals = volume[mask]
+    lo = np.percentile(vals, 5.0)
+    hi = np.percentile(vals, 95.0)
+    
+    if hi - lo < 1e-8:
+        return np.full_like(volume, -1.0)
+        
+    volume = np.clip(volume, lo, hi)
+    volume = (volume - lo) / (hi - lo)
+    volume = volume * 2.0 - 1.0
+    
+    processed_volume = np.full_like(volume, -1.0)
+    processed_volume[mask] = volume[mask]
+    
+    return processed_volume.astype(np.float32)
+
 def pad_or_crop(data, target_shape=(256, 256, 256)):
+    # Since background will be -1.0, pad with -1.0 instead of 0
     pad = []
     crop = []
     for i in range(3):
@@ -34,7 +58,7 @@ def pad_or_crop(data, target_shape=(256, 256, 256)):
             pad.append((0, 0))
             crop.append(slice(crop_lower, data.shape[i] - crop_upper))
     data = data[tuple(crop)]
-    data = np.pad(data, tuple(pad), mode='constant', constant_values=0)
+    data = np.pad(data, tuple(pad), mode='constant', constant_values=-1.0)
     return data
 
 def process_subject(args):
@@ -63,7 +87,8 @@ def process_subject(args):
             try:
                 img = nib.load(warp_file)
                 data = img.get_fdata(dtype=np.float32)
-                data_padded = pad_or_crop(data, target_shape)
+                data_norm = normalize(data)
+                data_padded = pad_or_crop(data_norm, target_shape)
                 
                 out_name = f"{patient_id}_time_{days:04d}.npy"
                 out_path = os.path.join(patient_out, out_name)
@@ -76,7 +101,7 @@ def main():
     parser.add_argument('--data-root', '-d', required=True)
     parser.add_argument('--output-root', '-o', required=True)
     parser.add_argument('--target-shape', type=int, nargs=3, default=[256, 256, 256])
-    parser.add_argument('--proc', '-p', type=int, default=8)
+    parser.add_argument('--proc', '-p', type=int, default=4)
     args = parser.parse_args()
 
     subjects = [s for s in sorted(glob.glob(os.path.join(args.data_root, '*'))) if os.path.isdir(s)]
